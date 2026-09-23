@@ -1,73 +1,147 @@
 # C++ Message Spool
 
-A small C++17 project for practicing message persistence, multithreading, and thread-safe queue processing on Linux.
+A C++17 message-processing project built to practice Linux development, message persistence, multithreading, synchronization, automated testing, and CI.
+
+The project implements a producer-consumer model in which multiple worker threads wait for incoming messages, process them concurrently, and persist them to disk.
 
 ## Features
 
-- Stores messages persistently in a text file
-- Loads previously saved messages on startup
-- Uses a FIFO message queue
-- Processes messages using multiple worker threads
-- Uses mutexes for thread-safe queue and file access
+- Producer-consumer message processing
+- Multiple concurrent worker threads
+- Thread-safe FIFO message queue
+- `std::condition_variable` for worker notification
+- `std::mutex` for synchronized queue and file access
+- Persistent message storage using file I/O
+- Loads previously stored messages on startup
+- Graceful worker shutdown
+- Automated FIFO queue testing
+- Automated persistence testing
+- CMake build configuration
+- GitHub Actions continuous integration
 - Built and tested on Linux
 
 ## Technologies
 
 - C++17
 - Linux
+- CMake
 - STL
 - `std::queue`
 - `std::thread`
 - `std::mutex`
+- `std::condition_variable`
 - File I/O
+- CTest
+- Git
+- GitHub Actions
+
+## Architecture
+
+The application follows a basic producer-consumer design.
+
+The main thread acts as the producer and accepts messages from the user. Each message is added to a shared FIFO queue.
+
+Multiple worker threads act as consumers. Workers wait on a condition variable instead of continuously checking the queue.
+
+When a new message is added:
+
+1. The producer locks the queue.
+2. The message is pushed into the FIFO queue.
+3. A waiting worker is notified.
+4. The worker safely removes the message from the queue.
+5. The message is written to persistent storage.
+6. The worker waits for another message.
+
+Mutexes protect shared resources and prevent concurrent access to the queue and storage file.
 
 ## Build
 
-Compile the program with:
+Configure the project:
 
 ```bash
-g++ -std=c++17 -pthread main.cpp -o message-spool
+cmake -S . -B build
+```
+
+Build the project:
+
+```bash
+cmake --build build
 ```
 
 ## Run
 
-Run the program with:
+Run the application:
 
 ```bash
-./message-spool
+./build/message-spool
 ```
 
-Enter messages one at a time. Type `done` when you are finished entering messages.
+Enter messages one at a time.
 
 Example:
 
 ```text
-Previously saved messages:
-- Hello from my first C++ message spool
-- Second message test
-
 Enter messages (type 'done' to finish):
 > Message one
-> Message two
-> Message three
-> done
-
 Worker 1 processed: Message one
+> Message two
 Worker 2 processed: Message two
-Worker 2 processed: Message three
+> Message three
+Worker 3 processed: Message three
+> done
 All messages processed.
 ```
 
-Messages are stored in `messages.txt` and loaded again the next time the program starts.
+Messages are stored in `messages.txt` and loaded again when the application is restarted.
 
-## How It Works
+## Automated Tests
 
-1. Previously stored messages are loaded from `messages.txt`.
-2. New messages are added to a FIFO queue.
-3. Multiple worker threads process messages from the queue.
-4. Mutexes protect shared queue and file operations.
-5. Processed messages are appended to persistent storage.
+The project currently includes two automated tests:
+
+- `QueueFIFOTest` verifies FIFO queue behavior.
+- `PersistenceTest` verifies that a message can be written to storage and read back correctly.
+
+Run all tests with:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Example result:
+
+```text
+100% tests passed, 0 tests failed out of 2
+```
+
+## Continuous Integration
+
+GitHub Actions automatically builds and tests the project on Ubuntu for pushes and pull requests to the `main` branch.
+
+The CI workflow performs:
+
+1. Repository checkout
+2. CMake configuration
+3. Project build
+4. Automated tests with CTest
+
+## Project Structure
+
+```text
+cpp-message-spool/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── CMakeLists.txt
+├── main.cpp
+├── test.cpp
+├── persistence_test.cpp
+├── .gitignore
+├── LICENSE
+└── README.md
+```
+
+Runtime files such as `messages.txt` and build artifacts are excluded from version control.
 
 ## Purpose
 
-This is a learning project focused on strengthening practical C++ and Linux skills while exploring basic concepts used in reliable message-processing systems.
+This is a learning project focused on strengthening practical C++ and Linux development skills while exploring concepts used in reliable message-processing systems, including concurrency, synchronization, persistence, automated testing, and continuous integration.
