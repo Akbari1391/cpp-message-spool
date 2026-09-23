@@ -1,35 +1,29 @@
+#include "message_spool.h"
+
 #include <cassert>
 #include <cstdio>
-#include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 int main() {
     const std::string filename = "test_messages.txt";
-    const std::string testMessage = "Persistent test message";
 
-    // Write a message to the test file.
-    {
-        std::ofstream outputFile(filename, std::ios::app);
+    std::remove(filename.c_str());
 
-        assert(outputFile.is_open());
+    MessageSpool spool(filename);
 
-        outputFile << testMessage << std::endl;
-    }
+    assert(spool.saveMessage("Message one"));
+    assert(spool.saveMessage("Message two"));
+    assert(spool.saveMessage("Message three"));
 
-    // Read the message back from the test file.
-    {
-        std::ifstream inputFile(filename);
+    const std::vector<std::string> messages = spool.loadMessages();
 
-        assert(inputFile.is_open());
+    assert(messages.size() == 3);
+    assert(messages[0] == "Message one");
+    assert(messages[1] == "Message two");
+    assert(messages[2] == "Message three");
 
-        std::string loadedMessage;
-        std::getline(inputFile, loadedMessage);
-
-        assert(loadedMessage == testMessage);
-    }
-
-    // Remove the temporary test file.
     std::remove(filename.c_str());
 
     std::cout << "Persistence test passed." << std::endl;

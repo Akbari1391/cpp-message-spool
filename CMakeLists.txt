@@ -8,18 +8,43 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-add_executable(message-spool main.cpp)
-target_link_libraries(message-spool PRIVATE Threads::Threads)
+add_library(message-spool-core
+    message_spool.cpp
+)
+
+target_include_directories(message-spool-core
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_executable(message-spool
+    main.cpp
+)
+
+target_link_libraries(message-spool
+    PRIVATE
+        message-spool-core
+        Threads::Threads
+)
 
 enable_testing()
 
-add_executable(message-spool-tests test.cpp)
+add_executable(message-spool-tests
+    test.cpp
+)
+
 add_test(
     NAME QueueFIFOTest
     COMMAND message-spool-tests
 )
 
-add_executable(persistence-test persistence_test.cpp)
+add_executable(persistence-test
+    persistence_test.cpp
+)
+
+target_link_libraries(persistence-test
+    PRIVATE message-spool-core
+)
+
 add_test(
     NAME PersistenceTest
     COMMAND persistence-test

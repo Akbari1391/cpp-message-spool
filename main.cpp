@@ -1,5 +1,6 @@
+#include "message_spool.h"
+
 #include <condition_variable>
-#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <queue>
@@ -10,12 +11,14 @@
 std::queue<std::string> messageQueue;
 
 std::mutex queueMutex;
-std::mutex fileMutex;
+std::mutex storageMutex;
 std::mutex outputMutex;
 
 std::condition_variable queueCondition;
 
 bool finished = false;
+
+MessageSpool spool("messages.txt");
 
 void processMessages(int workerId) {
     while (true) {
@@ -36,42 +39,33 @@ void processMessages(int workerId) {
             messageQueue.pop();
         }
 
+        bool saved = false;
+
         {
-            std::lock_guard<std::mutex> lock(fileMutex);
-
-            std::ofstream outputFile("messages.txt", std::ios::app);
-
-            if (!outputFile) {
-                std::lock_guard<std::mutex> outputLock(outputMutex);
-                std::cerr << "Error: Could not open storage file."
-                          << std::endl;
-                continue;
-            }
-
-            outputFile << message << std::endl;
+            std::lock_guard<std::mutex> lock(storageMutex);
+            saved = spool.saveMessage(message);
         }
 
         {
             std::lock_guard<std::mutex> lock(outputMutex);
 
-            std::cout << "Worker " << workerId
-                      << " processed: " << message
-                      << std::endl;
+            if (saved) {
+                std::cout << "Worker " << workerId
+                          << " processed: " << message
+                          << std::endl;
+            } else {
+                std::cerr << "Error: Could not save message."
+                          << std::endl;
+            }
         }
     }
 }
 
 int main() {
-    std::string message;
-
     std::cout << "Previously saved messages:" << std::endl;
 
-    std::ifstream inputFile("messages.txt");
-
-    if (inputFile) {
-        while (std::getline(inputFile, message)) {
-            std::cout << "- " << message << std::endl;
-        }
+    for (const auto& message : spool.loadMessages()) {
+        std::cout << "- " << message << std::endl;
     }
 
     constexpr int workerCount = 3;
@@ -83,6 +77,8 @@ int main() {
 
     std::cout << "\nEnter messages (type 'done' to finish):"
               << std::endl;
+
+    std::string message;
 
     while (true) {
         std::cout << "> ";
