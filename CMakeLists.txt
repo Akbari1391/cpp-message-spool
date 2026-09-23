@@ -9,5 +9,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 
 add_executable(message-spool main.cpp)
-
 target_link_libraries(message-spool PRIVATE Threads::Threads)
+
+enable_testing()
+
+add_executable(message-spool-tests test.cpp)
+
+add_test(
+    NAME QueueFIFOTest
+    COMMAND message-spool-tests
+)
