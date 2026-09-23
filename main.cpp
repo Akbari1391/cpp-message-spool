@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <string>
 
 int main() {
@@ -7,7 +8,17 @@ int main() {
     std::cout << "Enter a message: ";
     std::getline(std::cin, message);
 
-    std::cout << "Message received: " << message << std::endl;
+    std::ofstream file("messages.txt", std::ios::app);
+
+    if (!file) {
+        std::cerr << "Error: Could not open storage file." << std::endl;
+        return 1;
+    }
+
+    file << message << std::endl;
+    file.close();
+
+    std::cout << "Message saved successfully." << std::endl;
 
     return 0;
 }
