@@ -14,8 +14,13 @@ target_link_libraries(message-spool PRIVATE Threads::Threads)
 enable_testing()
 
 add_executable(message-spool-tests test.cpp)
-
 add_test(
     NAME QueueFIFOTest
     COMMAND message-spool-tests
+)
+
+add_executable(persistence-test persistence_test.cpp)
+add_test(
+    NAME PersistenceTest
+    COMMAND persistence-test
 )
