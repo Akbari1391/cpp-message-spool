@@ -1,23 +1,34 @@
-#include <iostream>
+#include <condition_variable>
 #include <fstream>
-#include <string>
-#include <queue>
-#include <thread>
+#include <iostream>
 #include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
 #include <vector>
 
 std::queue<std::string> messageQueue;
+
 std::mutex queueMutex;
 std::mutex fileMutex;
+std::mutex outputMutex;
+
+std::condition_variable queueCondition;
+
+bool finished = false;
 
 void processMessages(int workerId) {
     while (true) {
         std::string message;
 
         {
-            std::lock_guard<std::mutex> lock(queueMutex);
+            std::unique_lock<std::mutex> lock(queueMutex);
 
-            if (messageQueue.empty()) {
+            queueCondition.wait(lock, [] {
+                return !messageQueue.empty() || finished;
+            });
+
+            if (messageQueue.empty() && finished) {
                 return;
             }
 
@@ -31,16 +42,22 @@ void processMessages(int workerId) {
             std::ofstream outputFile("messages.txt", std::ios::app);
 
             if (!outputFile) {
+                std::lock_guard<std::mutex> outputLock(outputMutex);
                 std::cerr << "Error: Could not open storage file."
                           << std::endl;
-                return;
+                continue;
             }
 
             outputFile << message << std::endl;
         }
 
-        std::cout << "Worker " << workerId
-                  << " processed: " << message << std::endl;
+        {
+            std::lock_guard<std::mutex> lock(outputMutex);
+
+            std::cout << "Worker " << workerId
+                      << " processed: " << message
+                      << std::endl;
+        }
     }
 }
 
@@ -50,8 +67,18 @@ int main() {
     std::cout << "Previously saved messages:" << std::endl;
 
     std::ifstream inputFile("messages.txt");
-    while (std::getline(inputFile, message)) {
-        std::cout << "- " << message << std::endl;
+
+    if (inputFile) {
+        while (std::getline(inputFile, message)) {
+            std::cout << "- " << message << std::endl;
+        }
+    }
+
+    constexpr int workerCount = 3;
+    std::vector<std::thread> workers;
+
+    for (int i = 1; i <= workerCount; ++i) {
+        workers.emplace_back(processMessages, i);
     }
 
     std::cout << "\nEnter messages (type 'done' to finish):"
@@ -62,17 +89,21 @@ int main() {
         std::getline(std::cin, message);
 
         if (message == "done") {
+            {
+                std::lock_guard<std::mutex> lock(queueMutex);
+                finished = true;
+            }
+
+            queueCondition.notify_all();
             break;
         }
 
-        std::lock_guard<std::mutex> lock(queueMutex);
-        messageQueue.push(message);
-    }
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            messageQueue.push(message);
+        }
 
-    std::vector<std::thread> workers;
-
-    for (int i = 1; i <= 3; ++i) {
-        workers.emplace_back(processMessages, i);
+        queueCondition.notify_one();
     }
 
     for (auto& worker : workers) {
