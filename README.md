@@ -1,134 +1,159 @@
 # C++ Message Spool
 
-A C++17 message-processing project for practicing Linux development, concurrent message processing, persistence, automated testing, and continuous integration.
+A C++17 concurrent message-processing application featuring persistent message storage, an append-only message journal, restart recovery, automated testing, and continuous integration.
 
-The application uses a producer-consumer design with multiple worker threads. Messages are placed into a thread-safe FIFO queue, processed by available workers, and persisted to disk.
+The project demonstrates practical systems programming concepts, including multithreading, synchronization, file-based persistence, message lifecycle management, and error detection.
 
-## Features
+## Key Features
 
-- Producer-consumer message processing
-- Multiple concurrent worker threads
-- Thread-safe FIFO message queue
-- Worker synchronization with `std::condition_variable`
-- Shared-resource protection with `std::mutex`
-- Persistent message storage
-- Previously stored messages loaded on startup
+- Multithreaded producer-consumer architecture
+- Three concurrent message-processing workers
+- Thread-safe FIFO work queue
+- Synchronization using mutexes and condition variables
+- Append-only message journal
+- Unique message identifiers
+- Pending-message recovery after application restart
+- Message acknowledgement tracking
+- Journal corruption detection
 - Graceful worker shutdown
-- Reusable `MessageSpool` persistence component
-- Automated FIFO queue testing
-- Automated persistence testing against the production persistence component
-- CMake build configuration
-- CTest integration
-- GitHub Actions CI
-- Built and tested on Linux
+- CMake and CTest integration
+- Automated Linux builds and tests with GitHub Actions
 
-## Technologies
+## Technology Stack
 
 - C++17
 - Linux
 - CMake
-- STL
-- `std::queue`
-- `std::thread`
-- `std::mutex`
-- `std::condition_variable`
-- File I/O
 - CTest
-- Git
-- GitHub Actions
+- C++ Standard Library
+- Git and GitHub Actions
 
-## Architecture
+## System Architecture
 
-The application follows a producer-consumer model.
+The application uses a producer-consumer architecture.
 
-The main thread acts as the producer and accepts messages from the user. Each message is added to a shared FIFO queue.
+The main thread accepts messages and records them in a persistent journal before placing them into a shared work queue.
 
-Multiple worker threads act as consumers. Workers wait on a condition variable until a new message becomes available or the application begins shutting down.
+Three worker threads retrieve messages from the queue and process them concurrently.
 
-When a message is submitted:
+The processing workflow is:
 
-1. The producer locks the shared queue.
-2. The message is added to the FIFO queue.
-3. One waiting worker is notified.
-4. The worker safely removes the next message from the queue.
-5. The message is passed to the `MessageSpool` persistence component.
-6. The message is written to disk.
-7. The worker waits for the next available message.
+1. Accept a message from the user.
+2. Assign a unique message identifier.
+3. Append an enqueue record to the journal.
+4. Place the message into the thread-safe work queue.
+5. Retrieve the message using an available worker.
+6. Save the processed message to persistent storage.
+7. Append an acknowledgement record to the journal.
 
-Separate mutexes protect queue access, persistent storage operations, and console output.
+Mutexes protect shared resources, while condition variables coordinate worker activity.
 
-When the user enters `done`, waiting workers are notified and the application performs a graceful shutdown after queued work has been processed.
+## Persistent Message Journal
 
-## Persistence
+The `MessageSpool` component manages persistent message storage and journal operations.
 
-Message persistence is separated from the application logic through the `MessageSpool` class.
+The application uses two runtime files:
 
-`MessageSpool` provides operations to:
+- `messages.txt` — Stores processed message content.
+- `messages.txt.journal` — Tracks message enqueue and acknowledgement operations.
 
-- Append messages to persistent storage
-- Load previously stored messages
-- Report whether a message was successfully saved
+Journal records use message identifiers to track processing state.
 
-The application uses `messages.txt` as its runtime storage file.
+Pending messages can be reconstructed by replaying valid journal records.
 
-Separating persistence from `main.cpp` also allows the same production component to be tested directly.
+### Restart Recovery
 
-## Build
+When the application starts, it reads the journal and identifies messages that have not been acknowledged.
 
-Configure the project:
+These messages are restored to the processing queue.
+
+If the journal contains an invalid record, the application reports an error rather than silently treating the journal as empty.
+
+A missing journal is treated as a fresh application initialization.
+
+### Reliability Limitations
+
+The current implementation provides restart recovery for valid journal files but does not guarantee exactly-once processing.
+
+A message may be written to the output file more than once if the application stops after saving it but before recording its acknowledgement.
+
+File-stream flushing is used, but power-loss durability is not guaranteed through operating-system-level synchronization.
+
+These limitations are important considerations for future development.
+
+## Build Instructions
+
+Requirements:
+
+- C++17-compatible compiler
+- CMake 3.16 or newer
+- Linux development environment
+
+Configure:
 
 ```bash
 cmake -S . -B build
 ```
 
-Build the project:
+Build:
 
 ```bash
 cmake --build build
 ```
 
-## Run
+## Running the Application
 
-Run the application:
+Start the program:
 
 ```bash
 ./build/message-spool
 ```
 
-Enter messages one at a time.
+Enter messages interactively.
 
 Example:
 
 ```text
 Enter messages (type 'done' to finish):
 > Message one
-Worker 1 processed: Message one
 > Message two
-Worker 2 processed: Message two
 > Message three
-Worker 3 processed: Message three
 > done
-All messages processed.
+All messages processed successfully.
 ```
 
-Messages are stored in `messages.txt` and loaded again when the application is restarted.
+Worker processing messages may also appear during interactive input.
 
-Because workers execute concurrently, the worker ID assigned to each message may vary between runs.
+Type `done` to stop accepting messages and allow queued work to finish.
 
-## Automated Tests
+## Automated Testing
 
-The project currently includes two automated tests:
+The project includes two CTest targets.
 
-- `QueueFIFOTest` verifies FIFO queue behavior.
-- `PersistenceTest` exercises the production `MessageSpool` component by saving multiple messages and loading them back from temporary storage.
+### QueueFIFOTest
 
-Run all tests with:
+Verifies FIFO behavior using the C++ standard queue.
+
+### PersistenceTest
+
+Exercises the production `MessageSpool` component, including:
+
+- Initial startup without an existing journal
+- Persistent message storage and retrieval
+- Message enqueue operations
+- Unique message identifier generation
+- Message acknowledgements
+- Pending-message recovery after object recreation
+- Identifier continuity after acknowledgements
+- Detection of invalid journal records
+
+Run the tests:
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-Example result:
+Latest verified CI result:
 
 ```text
 100% tests passed, 0 tests failed out of 2
@@ -136,16 +161,16 @@ Example result:
 
 ## Continuous Integration
 
-GitHub Actions automatically builds and tests the project on Ubuntu for pushes and pull requests to the `main` branch.
+GitHub Actions automatically builds and tests the application.
 
-The CI workflow performs:
+The CI workflow includes:
 
 1. Repository checkout
 2. CMake configuration
-3. Project build
-4. Automated testing with CTest
+3. C++ compilation
+4. Automated test execution with CTest
 
-This helps verify that new changes continue to compile and pass the automated tests in a clean Linux environment.
+The project has been successfully built and tested using GitHub-hosted Linux runners.
 
 ## Project Structure
 
@@ -158,15 +183,41 @@ cpp-message-spool/
 ├── main.cpp
 ├── message_spool.h
 ├── message_spool.cpp
-├── test.cpp
 ├── persistence_test.cpp
+├── test.cpp
 ├── .gitignore
 ├── LICENSE
 └── README.md
 ```
 
-Runtime files such as `messages.txt`, compiled executables, and build artifacts are excluded from version control.
+## Engineering Concepts
 
-## Purpose
+This project demonstrates:
 
-This is a learning project focused on strengthening practical C++ and Linux development skills while exploring concepts used in reliable message-processing systems, including concurrency, synchronization, persistence, modular design, automated testing, and continuous integration.
+- Concurrent application development
+- Producer-consumer design
+- Thread synchronization
+- Persistent data management
+- Append-only journaling
+- Message state tracking
+- Restart recovery
+- Error handling
+- Automated regression testing
+- Continuous integration
+
+## Future Improvements
+
+Potential enhancements include:
+
+- Crash-consistent message completion
+- Idempotent processing
+- Journal checksums and recovery from incomplete records
+- Operating-system-level durability guarantees
+- Configurable worker pools
+- Retry policies and dead-letter queues
+- Structured logging and performance metrics
+- Additional concurrency and failure-injection tests
+
+## License
+
+MIT License.
