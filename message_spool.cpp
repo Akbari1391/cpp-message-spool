@@ -1,6 +1,8 @@
 #include "message_spool.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -37,7 +39,7 @@ bool decodeMessage(const std::string& encoded,
 
         input >> std::hex >> value;
 
-        if (input.fail() || !input.eof()) {
+        if (input.fail() || !input.eof() || value > 255) {
             return false;
         }
 
@@ -83,12 +85,12 @@ bool readJournal(
                 return false;
             }
 
-            if (pending.find(id) != pending.end() ||
-                id <= maxId) {
+            if (id <= maxId || pending.count(id) != 0) {
                 return false;
             }
 
             pending[id] = message;
+            maxId = id;
 
         } else if (operation == 'A') {
             if (record >> extra) {
@@ -102,16 +104,22 @@ bool readJournal(
         } else {
             return false;
         }
-
-        maxId = std::max(maxId, id);
     }
 
     return !input.bad();
 }
 
+bool journalExists(const std::string& filename,
+                   bool& exists) {
+    std::error_code error;
+
+    exists = std::filesystem::exists(filename, error);
+
+    return !error;
+}
+
 bool appendJournal(const std::string& filename,
                    const std::string& record) {
-
     std::ofstream output(
         filename,
         std::ios::app | std::ios::binary
@@ -169,32 +177,21 @@ bool MessageSpool::enqueueMessage(
 
     std::lock_guard<std::mutex> lock(fileMutex_);
 
-    // Empty messages are not supported.
     if (message.empty()) {
         return false;
     }
 
     std::map<std::uint64_t, std::string> pending;
     std::uint64_t maxId = 0;
+    bool exists = false;
 
-    {
-        std::ifstream check(journalFile_, std::ios::binary);
+    if (!journalExists(journalFile_, exists)) {
+        return false;
+    }
 
-        if (check.is_open()) {
-            check.close();
-
-            if (!readJournal(journalFile_, pending, maxId)) {
-                return false;
-            }
-        } else {
-            // A missing journal is allowed, but an existing
-            // unreadable journal must not be overwritten.
-            std::ifstream storageCheck(journalFile_);
-
-            if (storageCheck.bad()) {
-                return false;
-            }
-        }
+    if (exists &&
+        !readJournal(journalFile_, pending, maxId)) {
+        return false;
     }
 
     if (maxId == std::numeric_limits<std::uint64_t>::max()) {
@@ -222,16 +219,19 @@ bool MessageSpool::loadPendingMessages(
 
     messages.clear();
 
+    bool exists = false;
+
+    if (!journalExists(journalFile_, exists)) {
+        return false;
+    }
+
+    // A missing journal means a fresh installation.
+    if (!exists) {
+        return true;
+    }
+
     std::map<std::uint64_t, std::string> pending;
     std::uint64_t maxId = 0;
-
-    {
-        std::ifstream check(journalFile_, std::ios::binary);
-
-        if (!check.is_open()) {
-            return false;
-        }
-    }
 
     if (!readJournal(journalFile_, pending, maxId)) {
         return false;
@@ -244,7 +244,9 @@ bool MessageSpool::loadPendingMessages(
     return true;
 }
 
-bool MessageSpool::acknowledgeMessage(std::uint64_t messageId) {
+bool MessageSpool::acknowledgeMessage(
+    std::uint64_t messageId) {
+
     std::lock_guard<std::mutex> lock(fileMutex_);
 
     std::map<std::uint64_t, std::string> pending;
@@ -264,7 +266,9 @@ bool MessageSpool::acknowledgeMessage(std::uint64_t messageId) {
     );
 }
 
-bool MessageSpool::pendingCount(std::size_t& count) const {
+bool MessageSpool::pendingCount(
+    std::size_t& count) const {
+
     std::vector<MessageRecord> messages;
 
     if (!loadPendingMessages(messages)) {
