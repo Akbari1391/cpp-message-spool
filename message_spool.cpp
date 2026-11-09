@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -15,13 +16,15 @@ std::string encodeMessage(const std::string& message) {
 
     for (unsigned char ch : message) {
         output << std::hex << std::setfill('0')
-               << std::setw(2) << static_cast<unsigned int>(ch);
+               << std::setw(2)
+               << static_cast<unsigned int>(ch);
     }
 
     return output.str();
 }
 
-bool decodeMessage(const std::string& encoded, std::string& message) {
+bool decodeMessage(const std::string& encoded,
+                   std::string& message) {
     if (encoded.size() % 2 != 0) {
         return false;
     }
@@ -59,18 +62,20 @@ bool readJournal(
 
     while (std::getline(input, line)) {
         std::istringstream record(line);
-        char operation;
-        std::uint64_t id;
+        char operation = '\0';
+        std::uint64_t id = 0;
 
-        if (!(record >> operation >> id)) {
+        if (!(record >> operation >> id) || id == 0) {
             return false;
         }
+
+        std::string extra;
 
         if (operation == 'E') {
             std::string encoded;
             std::string message;
 
-            if (!(record >> encoded)) {
+            if (!(record >> encoded) || (record >> extra)) {
                 return false;
             }
 
@@ -78,9 +83,22 @@ bool readJournal(
                 return false;
             }
 
+            if (pending.find(id) != pending.end() ||
+                id <= maxId) {
+                return false;
+            }
+
             pending[id] = message;
+
         } else if (operation == 'A') {
-            pending.erase(id);
+            if (record >> extra) {
+                return false;
+            }
+
+            if (pending.erase(id) != 1) {
+                return false;
+            }
+
         } else {
             return false;
         }
@@ -91,11 +109,13 @@ bool readJournal(
     return !input.bad();
 }
 
-bool appendJournal(
-    const std::string& filename,
-    const std::string& record) {
+bool appendJournal(const std::string& filename,
+                   const std::string& record) {
 
-    std::ofstream output(filename, std::ios::app | std::ios::binary);
+    std::ofstream output(
+        filename,
+        std::ios::app | std::ios::binary
+    );
 
     if (!output) {
         return false;
@@ -149,18 +169,35 @@ bool MessageSpool::enqueueMessage(
 
     std::lock_guard<std::mutex> lock(fileMutex_);
 
+    // Empty messages are not supported.
+    if (message.empty()) {
+        return false;
+    }
+
     std::map<std::uint64_t, std::string> pending;
     std::uint64_t maxId = 0;
 
     {
-        std::ifstream check(journalFile_);
+        std::ifstream check(journalFile_, std::ios::binary);
 
-        if (check && !readJournal(journalFile_, pending, maxId)) {
-            return false;
+        if (check.is_open()) {
+            check.close();
+
+            if (!readJournal(journalFile_, pending, maxId)) {
+                return false;
+            }
+        } else {
+            // A missing journal is allowed, but an existing
+            // unreadable journal must not be overwritten.
+            std::ifstream storageCheck(journalFile_);
+
+            if (storageCheck.bad()) {
+                return false;
+            }
         }
     }
 
-    if (maxId == UINT64_MAX) {
+    if (maxId == std::numeric_limits<std::uint64_t>::max()) {
         return false;
     }
 
@@ -178,30 +215,33 @@ bool MessageSpool::enqueueMessage(
     return true;
 }
 
-std::vector<MessageRecord> MessageSpool::loadPendingMessages() const {
+bool MessageSpool::loadPendingMessages(
+    std::vector<MessageRecord>& messages) const {
+
     std::lock_guard<std::mutex> lock(fileMutex_);
 
-    std::vector<MessageRecord> result;
+    messages.clear();
+
     std::map<std::uint64_t, std::string> pending;
     std::uint64_t maxId = 0;
 
-    std::ifstream check(journalFile_);
+    {
+        std::ifstream check(journalFile_, std::ios::binary);
 
-    if (!check) {
-        return result;
+        if (!check.is_open()) {
+            return false;
+        }
     }
 
-    check.close();
-
     if (!readJournal(journalFile_, pending, maxId)) {
-        return result;
+        return false;
     }
 
     for (const auto& entry : pending) {
-        result.push_back({entry.first, entry.second});
+        messages.push_back({entry.first, entry.second});
     }
 
-    return result;
+    return true;
 }
 
 bool MessageSpool::acknowledgeMessage(std::uint64_t messageId) {
@@ -224,6 +264,13 @@ bool MessageSpool::acknowledgeMessage(std::uint64_t messageId) {
     );
 }
 
-std::size_t MessageSpool::pendingCount() const {
-    return loadPendingMessages().size();
+bool MessageSpool::pendingCount(std::size_t& count) const {
+    std::vector<MessageRecord> messages;
+
+    if (!loadPendingMessages(messages)) {
+        return false;
+    }
+
+    count = messages.size();
+    return true;
 }
