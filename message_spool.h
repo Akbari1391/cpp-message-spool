@@ -15,19 +15,20 @@ class MessageSpool {
 public:
     explicit MessageSpool(const std::string& storageFile);
 
-    // Existing functionality
     bool saveMessage(const std::string& message);
     std::vector<std::string> loadMessages() const;
 
-    // Reliable message processing
     bool enqueueMessage(const std::string& message,
                         std::uint64_t& messageId);
 
-    std::vector<MessageRecord> loadPendingMessages() const;
+    // Returns false if the journal cannot be read or is corrupted.
+    bool loadPendingMessages(
+        std::vector<MessageRecord>& messages) const;
 
     bool acknowledgeMessage(std::uint64_t messageId);
 
-    std::size_t pendingCount() const;
+    // Returns false on journal errors.
+    bool pendingCount(std::size_t& count) const;
 
 private:
     std::string storageFile_;
