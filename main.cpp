@@ -43,7 +43,7 @@ void processMessages(int workerId) {
             messageQueue.pop();
         }
 
-        bool saved = spool.saveMessage(message.content);
+        const bool saved = spool.saveMessage(message.content);
         bool acknowledged = false;
 
         if (saved) {
@@ -61,6 +61,7 @@ void processMessages(int workerId) {
                 std::cerr << "Worker " << workerId
                           << " failed to complete message "
                           << message.id << '\n';
+
                 processingFailed = true;
             }
         }
@@ -74,7 +75,16 @@ int main() {
         std::cout << "- " << message << '\n';
     }
 
-    const auto recovered = spool.loadPendingMessages();
+    std::vector<MessageRecord> recovered;
+
+    if (!spool.loadPendingMessages(recovered)) {
+        std::cerr
+            << "Error: Cannot read message journal.\n"
+            << "The journal may be missing, unreadable, or corrupted.\n"
+            << "Processing stopped to prevent data loss.\n";
+
+        return 1;
+    }
 
     std::cout << "Recovered " << recovered.size()
               << " pending messages.\n";
@@ -112,8 +122,12 @@ int main() {
         std::uint64_t messageId = 0;
 
         if (!spool.enqueueMessage(message, messageId)) {
-            std::cerr << "Error: Could not enqueue message.\n";
-            continue;
+            std::cerr
+                << "Error: Could not enqueue message.\n"
+                << "Check journal integrity and file permissions.\n";
+
+            processingFailed = true;
+            break;
         }
 
         {
@@ -135,11 +149,17 @@ int main() {
         worker.join();
     }
 
-    const std::size_t remaining = spool.pendingCount();
+    std::size_t remaining = 0;
+
+    if (!spool.pendingCount(remaining)) {
+        std::cerr << "Error: Cannot verify pending messages.\n";
+        return 1;
+    }
 
     if (processingFailed || remaining != 0) {
         std::cerr << "Warning: " << remaining
                   << " pending messages remain.\n";
+
         return 1;
     }
 
