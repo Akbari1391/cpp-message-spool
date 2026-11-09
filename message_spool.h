@@ -16,6 +16,9 @@ public:
     std::vector<std::string> loadPendingMessages() const;
     bool clearPendingMessages();
 
+    bool acknowledgePendingMessage(const std::string& message);
+    bool recoverPendingMessages();
+
 private:
     std::string storageFile_;
     std::string pendingFile_;
