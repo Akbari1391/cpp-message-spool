@@ -1,191 +1,229 @@
 #include "message_spool.h"
 
-#include <cstdio>
+#include <algorithm>
 #include <fstream>
+#include <iomanip>
+#include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
+namespace {
+
+std::string encodeMessage(const std::string& message) {
+    std::ostringstream output;
+
+    for (unsigned char ch : message) {
+        output << std::hex << std::setfill('0')
+               << std::setw(2) << static_cast<unsigned int>(ch);
+    }
+
+    return output.str();
+}
+
+bool decodeMessage(const std::string& encoded, std::string& message) {
+    if (encoded.size() % 2 != 0) {
+        return false;
+    }
+
+    message.clear();
+
+    for (std::size_t i = 0; i < encoded.size(); i += 2) {
+        unsigned int value = 0;
+        std::istringstream input(encoded.substr(i, 2));
+
+        input >> std::hex >> value;
+
+        if (input.fail() || !input.eof()) {
+            return false;
+        }
+
+        message.push_back(static_cast<char>(value));
+    }
+
+    return true;
+}
+
+bool readJournal(
+    const std::string& filename,
+    std::map<std::uint64_t, std::string>& pending,
+    std::uint64_t& maxId) {
+
+    std::ifstream input(filename, std::ios::binary);
+
+    if (!input) {
+        return false;
+    }
+
+    std::string line;
+
+    while (std::getline(input, line)) {
+        std::istringstream record(line);
+        char operation;
+        std::uint64_t id;
+
+        if (!(record >> operation >> id)) {
+            return false;
+        }
+
+        if (operation == 'E') {
+            std::string encoded;
+            std::string message;
+
+            if (!(record >> encoded)) {
+                return false;
+            }
+
+            if (!decodeMessage(encoded, message)) {
+                return false;
+            }
+
+            pending[id] = message;
+        } else if (operation == 'A') {
+            pending.erase(id);
+        } else {
+            return false;
+        }
+
+        maxId = std::max(maxId, id);
+    }
+
+    return !input.bad();
+}
+
+bool appendJournal(
+    const std::string& filename,
+    const std::string& record) {
+
+    std::ofstream output(filename, std::ios::app | std::ios::binary);
+
+    if (!output) {
+        return false;
+    }
+
+    output << record << '\n';
+    output.flush();
+
+    return static_cast<bool>(output);
+}
+
+} // namespace
+
 MessageSpool::MessageSpool(const std::string& storageFile)
     : storageFile_(storageFile),
-      pendingFile_(storageFile + ".pending") {
+      journalFile_(storageFile + ".journal") {
 }
 
 bool MessageSpool::saveMessage(const std::string& message) {
     std::lock_guard<std::mutex> lock(fileMutex_);
 
-    std::ofstream outputFile(storageFile_, std::ios::app);
+    std::ofstream output(storageFile_, std::ios::app);
 
-    if (!outputFile) {
+    if (!output) {
         return false;
     }
 
-    outputFile << message << '\n';
-    outputFile.flush();
+    output << message << '\n';
+    output.flush();
 
-    return static_cast<bool>(outputFile);
+    return static_cast<bool>(output);
 }
 
 std::vector<std::string> MessageSpool::loadMessages() const {
     std::lock_guard<std::mutex> lock(fileMutex_);
 
     std::vector<std::string> messages;
-    std::ifstream inputFile(storageFile_);
+    std::ifstream input(storageFile_);
     std::string message;
 
-    while (std::getline(inputFile, message)) {
+    while (std::getline(input, message)) {
         messages.push_back(message);
     }
 
     return messages;
 }
 
-bool MessageSpool::savePendingMessage(const std::string& message) {
-    std::lock_guard<std::mutex> lock(fileMutex_);
-
-    std::ofstream outputFile(pendingFile_, std::ios::app);
-
-    if (!outputFile) {
-        return false;
-    }
-
-    outputFile << message << '\n';
-    outputFile.flush();
-
-    return static_cast<bool>(outputFile);
-}
-
-std::vector<std::string> MessageSpool::loadPendingMessages() const {
-    std::lock_guard<std::mutex> lock(fileMutex_);
-
-    std::vector<std::string> messages;
-    std::ifstream inputFile(pendingFile_);
-    std::string message;
-
-    while (std::getline(inputFile, message)) {
-        messages.push_back(message);
-    }
-
-    return messages;
-}
-
-bool MessageSpool::clearPendingMessages() {
-    std::lock_guard<std::mutex> lock(fileMutex_);
-
-    std::ifstream inputFile(pendingFile_);
-
-    if (!inputFile) {
-        return true;
-    }
-
-    inputFile.close();
-
-    return std::remove(pendingFile_.c_str()) == 0;
-}
-
-bool MessageSpool::acknowledgePendingMessage(
-    const std::string& message) {
+bool MessageSpool::enqueueMessage(
+    const std::string& message,
+    std::uint64_t& messageId) {
 
     std::lock_guard<std::mutex> lock(fileMutex_);
 
-    std::ifstream inputFile(pendingFile_);
-
-    if (!inputFile) {
-        return false;
-    }
-
-    std::vector<std::string> remaining;
-    std::string current;
-    bool removed = false;
-
-    while (std::getline(inputFile, current)) {
-        if (!removed && current == message) {
-            removed = true;
-        } else {
-            remaining.push_back(current);
-        }
-    }
-
-    if (inputFile.bad()) {
-        return false;
-    }
-
-    inputFile.close();
-
-    if (!removed) {
-        return false;
-    }
-
-    const std::string tempFile = pendingFile_ + ".tmp";
+    std::map<std::uint64_t, std::string> pending;
+    std::uint64_t maxId = 0;
 
     {
-        std::ofstream outputFile(tempFile, std::ios::trunc);
+        std::ifstream check(journalFile_);
 
-        if (!outputFile) {
-            return false;
-        }
-
-        for (const auto& item : remaining) {
-            outputFile << item << '\n';
-        }
-
-        outputFile.flush();
-
-        if (!outputFile) {
+        if (check && !readJournal(journalFile_, pending, maxId)) {
             return false;
         }
     }
 
-    if (std::rename(tempFile.c_str(), pendingFile_.c_str()) != 0) {
-        std::remove(tempFile.c_str());
+    if (maxId == UINT64_MAX) {
         return false;
     }
 
+    const std::uint64_t newId = maxId + 1;
+
+    const std::string record =
+        "E " + std::to_string(newId) + " " +
+        encodeMessage(message);
+
+    if (!appendJournal(journalFile_, record)) {
+        return false;
+    }
+
+    messageId = newId;
     return true;
 }
 
-bool MessageSpool::recoverPendingMessages() {
+std::vector<MessageRecord> MessageSpool::loadPendingMessages() const {
     std::lock_guard<std::mutex> lock(fileMutex_);
 
-    std::ifstream inputFile(pendingFile_);
+    std::vector<MessageRecord> result;
+    std::map<std::uint64_t, std::string> pending;
+    std::uint64_t maxId = 0;
 
-    if (!inputFile) {
-        return true;
+    std::ifstream check(journalFile_);
+
+    if (!check) {
+        return result;
     }
 
-    std::vector<std::string> pending;
-    std::string message;
+    check.close();
 
-    while (std::getline(inputFile, message)) {
-        pending.push_back(message);
+    if (!readJournal(journalFile_, pending, maxId)) {
+        return result;
     }
 
-    if (inputFile.bad()) {
+    for (const auto& entry : pending) {
+        result.push_back({entry.first, entry.second});
+    }
+
+    return result;
+}
+
+bool MessageSpool::acknowledgeMessage(std::uint64_t messageId) {
+    std::lock_guard<std::mutex> lock(fileMutex_);
+
+    std::map<std::uint64_t, std::string> pending;
+    std::uint64_t maxId = 0;
+
+    if (!readJournal(journalFile_, pending, maxId)) {
         return false;
     }
 
-    inputFile.close();
-
-    std::ofstream outputFile(storageFile_, std::ios::app);
-
-    if (!outputFile) {
+    if (pending.find(messageId) == pending.end()) {
         return false;
     }
 
-    for (const auto& item : pending) {
-        outputFile << item << '\n';
-    }
+    return appendJournal(
+        journalFile_,
+        "A " + std::to_string(messageId)
+    );
+}
 
-    outputFile.flush();
-
-    if (!outputFile) {
-        return false;
-    }
-
-    outputFile.close();
-
-    if (!outputFile) {
-        return false;
-    }
-
-    return std::remove(pendingFile_.c_str()) == 0;
+std::size_t MessageSpool::pendingCount() const {
+    return loadPendingMessages().size();
 }
